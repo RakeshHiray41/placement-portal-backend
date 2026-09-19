@@ -16,7 +16,6 @@ public class StorageService {
     @Value("${file.upload-dir}")
     private String uploadDir;
 
-    // FIX: added size limit and allowed file types (previously anything could be uploaded)
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
     private static final Set<String> ALLOWED_EXT = Set.of("jpg", "jpeg", "png", "webp", "pdf");
 
@@ -30,9 +29,6 @@ public class StorageService {
             throw new IllegalArgumentException("File too large. Max 5MB allowed.");
         }
 
-        // FIX: previously used file.getOriginalFilename() directly in the saved path,
-        // which allowed path traversal (e.g. a file named "../../evil.png").
-        // Now we only keep the extension and generate a fully random name.
         String original = StringUtils.cleanPath(
                 file.getOriginalFilename() == null ? "" : file.getOriginalFilename()
         );
@@ -54,7 +50,6 @@ public class StorageService {
         String fileName = UUID.randomUUID() + "." + ext;
         Path filePath = uploadPath.resolve(fileName).normalize();
 
-        // Safety net: never allow writing outside the uploads folder
         if (!filePath.startsWith(uploadPath)) {
             throw new IllegalArgumentException("Invalid file path.");
         }
@@ -62,5 +57,28 @@ public class StorageService {
         Files.copy(file.getInputStream(), filePath, StandardCopyOption.REPLACE_EXISTING);
 
         return "/uploads/" + fileName;
+    }
+
+    // FIX: added — previously, when a student/company's photo or logo was
+    // replaced, the old file stayed on disk forever (orphaned), slowly
+    // filling up storage. This safely removes the old file, given the
+    // "/uploads/xxxx.jpg" style URL that was stored in the database.
+    public void delete(String fileUrl) {
+        if (fileUrl == null || fileUrl.isBlank() || !fileUrl.startsWith("/uploads/")) {
+            return; // nothing to delete, or not a file we manage
+        }
+        try {
+            String fileName = fileUrl.substring("/uploads/".length());
+            Path uploadPath = Paths.get(uploadDir).toAbsolutePath().normalize();
+            Path filePath = uploadPath.resolve(fileName).normalize();
+
+            // Safety net: never delete anything outside the uploads folder
+            if (filePath.startsWith(uploadPath)) {
+                Files.deleteIfExists(filePath);
+            }
+        } catch (IOException ignored) {
+            // Deleting the old file is a best-effort cleanup; failing here
+            // should never block the actual update from succeeding.
+        }
     }
 }

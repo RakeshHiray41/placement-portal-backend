@@ -12,8 +12,11 @@ import com.placement.placement.service.GeminiService;
 import com.placement.placement.service.StorageService;
 import jakarta.mail.MessagingException;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -45,6 +48,22 @@ public class AdminController
     @Autowired
     private PlacementRepository placementRepo;
 
+    // ================= VALIDATION HELPERS =================
+    private static final String EMAIL_REGEX = "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$";
+
+    private void requireNotBlank(String value, String fieldName) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(fieldName + " is required");
+        }
+    }
+
+    private void requireValidEmail(String value, String fieldName) {
+        requireNotBlank(value, fieldName);
+        if (!value.matches(EMAIL_REGEX)) {
+            throw new IllegalArgumentException("Valid " + fieldName + " is required");
+        }
+    }
+
     // ================= STUDENT =================
 
 
@@ -59,6 +78,9 @@ public class AdminController
             @RequestParam(required = false) String resumeUrl,
             @RequestParam(required = false) MultipartFile photoFile
     ) throws IOException {
+
+        requireNotBlank(fullName, "Full name");
+        requireValidEmail(email, "Email");
 
         Student s = new Student();
         s.setFullName(fullName);
@@ -97,6 +119,9 @@ public class AdminController
             @RequestParam(required = false) MultipartFile photoFile
     ) throws IOException {
 
+        requireNotBlank(fullName, "Full name");
+        requireValidEmail(email, "Email");
+
         Student s = studentRepo.findById(id)
                 .orElseThrow(() -> new RuntimeException("Student not found"));
 
@@ -106,16 +131,25 @@ public class AdminController
         s.setResumeUrl(resumeUrl);
 
         if (photoFile != null && !photoFile.isEmpty()) {
+            // FIX: previously the old photo file was left on disk forever
+            // (orphaned) every time a new one was uploaded. Now the old
+            // one is deleted right after the new one is successfully stored.
+            String oldPhotoUrl = s.getPhotoUrl();
             s.setPhotoUrl(storageService.store(photoFile));
+            storageService.delete(oldPhotoUrl);
         }
 
         return studentRepo.save(s);
     }
 
     @DeleteMapping("/students/{id}")
-    public String deleteStudent(@PathVariable Long id) {
-        studentRepo.deleteById(id);
-        return "Student deleted with id: " + id;
+    public ResponseEntity<String> deleteStudent(@PathVariable Long id) {
+        try {
+            studentRepo.deleteById(id);
+            return ResponseEntity.ok("Student deleted with id: " + id);
+        } catch (EmptyResultDataAccessException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Student not found with id: " + id);
+        }
     }
 
 
@@ -131,12 +165,16 @@ public class AdminController
             @RequestParam(required = false) MultipartFile logo
     ) throws IOException {
 
+        requireNotBlank(name, "Company name");
+        if (contactEmail != null && !contactEmail.isBlank()) {
+            requireValidEmail(contactEmail, "Contact email");
+        }
+
         Company c = new Company();
         c.setName(name);
         c.setWebsite(website);
         c.setContactEmail(contactEmail);
 
-        // ✅ SAME AS STUDENT PHOTO LOGIC
         if (logo != null) {
             c.setLogoUrl(storageService.store(logo));
         }
@@ -168,6 +206,11 @@ public class AdminController
             @RequestParam(required = false) MultipartFile logo
     ) throws IOException {
 
+        requireNotBlank(name, "Company name");
+        if (contactEmail != null && !contactEmail.isBlank()) {
+            requireValidEmail(contactEmail, "Contact email");
+        }
+
         Company c = companyRepo.findById(id)
                 .orElseThrow(() -> new RuntimeException("Company not found"));
 
@@ -175,9 +218,12 @@ public class AdminController
         c.setWebsite(website);
         c.setContactEmail(contactEmail);
 
-        // ✅ SAME STORAGE SERVICE
         if (logo != null) {
+            // FIX: same orphaned-file issue as student photos -- delete the old
+            // logo from disk once the new one is stored successfully.
+            String oldLogoUrl = c.getLogoUrl();
             c.setLogoUrl(storageService.store(logo));
+            storageService.delete(oldLogoUrl);
         }
 
         return companyRepo.save(c);
@@ -185,14 +231,23 @@ public class AdminController
 
 
     @DeleteMapping("/companies/{id}")
-    public String deleteCompany(@PathVariable Long id) {
-        companyRepo.deleteById(id);
-        return "Company deleted with id: " + id;
+    public ResponseEntity<String> deleteCompany(@PathVariable Long id) {
+        try {
+            companyRepo.deleteById(id);
+            return ResponseEntity.ok("Company deleted with id: " + id);
+        } catch (EmptyResultDataAccessException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Company not found with id: " + id);
+        }
     }
 
     @PostMapping("/companies/{id}/promote")
     public String promoteCompany(@PathVariable Long id) throws MessagingException {
-        Company c = companyRepo.findById(id).orElseThrow();
+        Company c = companyRepo.findById(id).orElseThrow(() -> new RuntimeException("Company not found"));
+
+        if (c.getContactEmail() == null || c.getContactEmail().isBlank()) {
+            throw new IllegalArgumentException("This company has no contact email on file, so a promotion email cannot be sent.");
+        }
+
         String aiText = geminiService.generatePromotionalContent(c.getName());
         emailService.sendEmail(c.getContactEmail(), "Partnership Invitation", aiText);
         return "Email sent to " + c.getContactEmail();
@@ -205,6 +260,8 @@ public class AdminController
                                      @RequestParam Long companyId,
                                      @RequestParam String role,
                                      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate placedDate) {
+
+        requireNotBlank(role, "Role");
 
         Student student = studentRepo.findById(studentId)
                 .orElseThrow(() -> new RuntimeException("Student not found"));
@@ -220,8 +277,6 @@ public class AdminController
 
         return placementRepo.save(p);
     }
-
-    /// this is 2
 
     @GetMapping("/placements")
     public List<Placement> getAllPlacements() {
@@ -241,6 +296,8 @@ public class AdminController
                                      @RequestParam String role,
                                      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate placedDate) {
 
+        requireNotBlank(role, "Role");
+
         Placement p = placementRepo.findById(id)
                 .orElseThrow(() -> new RuntimeException("Placement not found"));
 
@@ -259,19 +316,19 @@ public class AdminController
     }
 
     @DeleteMapping("/placements/{id}")
-    public String deletePlacement(@PathVariable Long id) {
-        placementRepo.deleteById(id);
-        return "Placement deleted with id: " + id;
+    public ResponseEntity<String> deletePlacement(@PathVariable Long id) {
+        try {
+            placementRepo.deleteById(id);
+            return ResponseEntity.ok("Placement deleted with id: " + id);
+        } catch (EmptyResultDataAccessException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Placement not found with id: " + id);
+        }
     }
 
 
 
     @GetMapping("/test")
     public String testGemini(@RequestParam String company) {
-        // FIX: the frontend sends "CompanyName:::custom prompt text" as a single
-        // "company" param, but this was never being split -- the whole string
-        // (including ":::...") was treated as the company name, so the custom
-        // prompt typed by the admin was never actually followed properly.
         String[] parts = company.split(":::", 2);
         String companyName = parts[0];
         String extraInstructions = parts.length > 1 ? parts[1] : null;
@@ -287,13 +344,13 @@ public class AdminController
         String subject = data.get("subject");
         String body = data.get("body");
 
+        requireValidEmail(to, "Recipient email");
+        requireNotBlank(subject, "Subject");
+        requireNotBlank(body, "Body");
+
         emailService.sendEmail(to, subject, body);
 
         return "Email sent to " + to;
     }
-
-
-
-
 
 }

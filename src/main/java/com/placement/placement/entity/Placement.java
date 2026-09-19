@@ -1,6 +1,6 @@
 package com.placement.placement.entity;
 import jakarta.persistence.*;
-
+import jakarta.validation.constraints.NotBlank;
 
 import java.time.LocalDate;
 
@@ -14,7 +14,10 @@ public class Placement {
     @ManyToOne private Student student;
     @ManyToOne private Company company;
 
+    // FIX: added validation for consistency with the manual check in AdminController.
+    @NotBlank(message = "Role is required")
     private String role;
+
     private LocalDate placedDate;
 
     public Long getId() {
