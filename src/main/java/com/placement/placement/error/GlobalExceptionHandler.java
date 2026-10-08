@@ -45,6 +45,18 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(apiError, HttpStatus.BAD_REQUEST);
     }
 
+    // FIX: added — if a delete or save ever hits a database relation
+    // constraint we haven't explicitly handled elsewhere, this gives a clear
+    // message instead of a raw database stack trace in a generic 500.
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ApiError> handleDataIntegrityViolation(org.springframework.dao.DataIntegrityViolationException ex) {
+        ApiError apiError = new ApiError(
+                "This record can't be deleted or saved because it's linked to other data.",
+                HttpStatus.CONFLICT
+        );
+        return new ResponseEntity<>(apiError, HttpStatus.CONFLICT);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiError> handleGenericException(Exception ex) {
         ApiError apiError = new ApiError("An unexpected error occurred: " + ex.getMessage(), HttpStatus.INTERNAL_SERVER_ERROR);

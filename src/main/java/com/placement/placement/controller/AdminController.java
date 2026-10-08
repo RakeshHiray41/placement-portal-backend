@@ -142,9 +142,14 @@ public class AdminController
         return studentRepo.save(s);
     }
 
+    // FIX: deleting a student that already had placement records used to
+    // fail with a database foreign-key error, because those placement
+    // rows still pointed at this student. Now the related placements are
+    // removed first, then the student itself.
     @DeleteMapping("/students/{id}")
     public ResponseEntity<String> deleteStudent(@PathVariable Long id) {
         try {
+            placementRepo.deleteByStudentId(id);
             studentRepo.deleteById(id);
             return ResponseEntity.ok("Student deleted with id: " + id);
         } catch (EmptyResultDataAccessException ex) {
@@ -230,9 +235,12 @@ public class AdminController
     }
 
 
+    // FIX: same relation issue as students -- delete this company's
+    // placement records first, then the company itself.
     @DeleteMapping("/companies/{id}")
     public ResponseEntity<String> deleteCompany(@PathVariable Long id) {
         try {
+            placementRepo.deleteByCompanyId(id);
             companyRepo.deleteById(id);
             return ResponseEntity.ok("Company deleted with id: " + id);
         } catch (EmptyResultDataAccessException ex) {
